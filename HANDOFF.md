@@ -6,7 +6,7 @@
 > "verified" claim — re-check live.**
 >
 > Language: Burmese (user's working language). Technical terms in English.
-> Last updated: 2026-11-11 ~15:25 +0630. Status: **LIVE and verified.**
+> Last updated: 2026-11-11 ~15:44 +0630. Status: **LIVE and verified.**
 
 ---
 
@@ -187,8 +187,10 @@ Other documented methods (see `SELFHOST.md` §5 for details):
 
 ## 9. Pending / next steps
 
-- [ ] **Add the site to the My Sites hub** (`https://alllinksbyzinmuse.vercel.app`)
-  — standing rule: every site Muse builds gets added to the hub. Not done yet.
+- [x] **Add the site to the My Sites hub** (`https://alllinksbyzinmuse.vercel.app`)
+  — DONE 2026-11-11: new card "Tipitaka Pali Reader (Vercel)" added to the hub
+  (commit `1317510` in `uzinbymuse/alllinksbyzinmuse`, index.html), verified live:
+  21 cards, footer updated. The old VPS card (tipi.upanna.top) stays as-is.
 - [ ] **User's phone check** of https://tipitaka-web-three.vercel.app
   (he has not confirmed it on his phone yet).
 - [ ] Keep-alive: first scheduled run Nov 14, 2026 — confirm it fires
