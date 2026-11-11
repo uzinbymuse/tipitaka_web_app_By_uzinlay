@@ -1886,7 +1886,7 @@ def api_dict_lookup():
 
 # ----------------- Search API -----------------
 
-def search_pali_phrase(cur, query, page=1, limit=20):
+def search_pali_phrase(cur, query, page=1, limit=20, book_id=None):
     raw_tokens = query.strip().split()
     clean_tokens = [clean_pali_word(t) for t in raw_tokens]
     clean_tokens = [t for t in clean_tokens if t]
@@ -1963,6 +1963,10 @@ def search_pali_phrase(cur, query, page=1, limit=20):
                     "snippet": snippet
                 })
 
+    # Current-book scope: keep only pages from the requested book
+    if book_id:
+        matching_pages = [m for m in matching_pages if m["book_id"] == book_id]
+
     # Sort strictly by canonical book order (mula -> attha -> tika -> annya) and page number
     matching_pages.sort(key=lambda x: (x["book_order"], x["page"]))
     for m in matching_pages:
@@ -1983,7 +1987,7 @@ def _escape_like(s):
     return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
-def search_mm_phrase(conn, query, page=1, limit=20):
+def search_mm_phrase(conn, query, page=1, limit=20, book_id=None):
     clean_q = query.strip()
     if not clean_q:
         return {"type": "mm_phrase", "query": query, "total": 0, "page": page, "results": []}
@@ -1992,19 +1996,25 @@ def search_mm_phrase(conn, query, page=1, limit=20):
     like_pattern = f"%{_escape_like(clean_q)}%"
     offset = (page - 1) * limit
 
-    total = cur.execute("""
+    where = "WHERE p.content LIKE ? ESCAPE '\\'"
+    params = [like_pattern]
+    if book_id:
+        where += " AND p.book_id = ?"
+        params.append(book_id)
+
+    total = cur.execute(f"""
         SELECT count(*)
         FROM mm_pages p
-        WHERE p.content LIKE ? ESCAPE '\\'
-    """, (like_pattern,)).fetchone()[0]
+        {where}
+    """, params).fetchone()[0]
 
-    rows = cur.execute("""
+    rows = cur.execute(f"""
         SELECT p.book_id, b.name as book_name, p.page, p.content
         FROM mm_pages p
         JOIN book b ON p.book_id = b.id
-        WHERE p.content LIKE ? ESCAPE '\\'
+        {where}
         LIMIT ? OFFSET ?
-    """, (like_pattern, limit, offset)).fetchall()
+    """, params + [limit, offset]).fetchall()
 
     results = []
     for r in rows:
@@ -2060,16 +2070,19 @@ def api_search():
     if not query:
         return jsonify({"results": [], "total": 0})
 
+    # Optional current-book scope (?book=<book id>): limits text search to one book
+    book = request.args.get("book", "").strip() or None
+
     if stype == "phrase":
         conn = get_pali_db()
         cur = conn.cursor()
-        return jsonify(search_pali_phrase(cur, query, page=page, limit=limit))
+        return jsonify(search_pali_phrase(cur, query, page=page, limit=limit, book_id=book))
 
     elif stype == "mm_phrase":
         if not _db_available("mm", DB_MM_PATH):
             return jsonify({"results": [], "total": 0})
         m_conn = get_mm_db()
-        return jsonify(search_mm_phrase(m_conn, query, page=page, limit=limit))
+        return jsonify(search_mm_phrase(m_conn, query, page=page, limit=limit, book_id=book))
 
     elif stype == "mm_book":
         # Search Myanmar translated books
@@ -2097,15 +2110,20 @@ def api_search():
             return jsonify({"results": [], "total": 0})
         m_conn = get_mm_db()
         m_cur = m_conn.cursor()
-        total = m_cur.execute("SELECT count(*) FROM toc WHERE name LIKE ?", (f"%{query}%",)).fetchone()[0]
-        rows = m_cur.execute("""
+        toc_where = "WHERE t.name LIKE ?"
+        toc_params = [f"%{query}%"]
+        if book:
+            toc_where += " AND t.book_id = ?"
+            toc_params.append(book)
+        total = m_cur.execute(f"SELECT count(*) FROM toc t {toc_where}", toc_params).fetchone()[0]
+        rows = m_cur.execute(f"""
             SELECT t.name, t.type, t.page_number, t.book_id, b.name as book_name
             FROM toc t
             JOIN book b ON t.book_id = b.id
-            WHERE t.name LIKE ?
+            {toc_where}
             ORDER BY t.book_id, t.page_number
             LIMIT ? OFFSET ?
-        """, (f"%{query}%", limit, offset)).fetchall()
+        """, toc_params + [limit, offset]).fetchall()
         return jsonify({
             "type": "mm_toc",
             "query": query,
@@ -2117,15 +2135,20 @@ def api_search():
     elif stype == "sutta":
         conn = get_pali_db()
         cur = conn.cursor()
-        total = cur.execute("SELECT count(*) FROM suttas WHERE name LIKE ?", (f"%{query}%",)).fetchone()[0]
-        rows = cur.execute("""
+        sutta_where = "WHERE s.name LIKE ?"
+        sutta_params = [f"%{query}%"]
+        if book:
+            sutta_where += " AND s.book_id = ?"
+            sutta_params.append(book)
+        total = cur.execute(f"SELECT count(*) FROM suttas s {sutta_where}", sutta_params).fetchone()[0]
+        rows = cur.execute(f"""
             SELECT s.name, s.book_id, s.page_number, b.name as book_name, s.sutta_id, s.nikaya
             FROM suttas s
             JOIN books b ON s.book_id = b.id
-            WHERE s.name LIKE ?
+            {sutta_where}
             ORDER BY s.page_number ASC
             LIMIT ? OFFSET ?
-        """, (f"%{query}%", limit, offset)).fetchall()
+        """, sutta_params + [limit, offset]).fetchall()
         return jsonify({
             "type": "sutta",
             "query": query,
@@ -2154,15 +2177,20 @@ def api_search():
     elif stype == "toc":
         conn = get_pali_db()
         cur = conn.cursor()
-        total = cur.execute("SELECT count(*) FROM tocs WHERE name LIKE ?", (f"%{query}%",)).fetchone()[0]
-        rows = cur.execute("""
+        toc_where = "WHERE t.name LIKE ?"
+        toc_params = [f"%{query}%"]
+        if book:
+            toc_where += " AND t.book_id = ?"
+            toc_params.append(book)
+        total = cur.execute(f"SELECT count(*) FROM tocs t {toc_where}", toc_params).fetchone()[0]
+        rows = cur.execute(f"""
             SELECT t.name, t.type, t.page_number, t.book_id, b.name as book_name
             FROM tocs t
             JOIN books b ON t.book_id = b.id
-            WHERE t.name LIKE ?
+            {toc_where}
             ORDER BY t.book_id, t.page_number
             LIMIT ? OFFSET ?
-        """, (f"%{query}%", limit, offset)).fetchall()
+        """, toc_params + [limit, offset]).fetchall()
         return jsonify({
             "type": "toc",
             "query": query,
@@ -2183,14 +2211,15 @@ def api_search():
             SELECT book_id, paragraph_number, page_number, gloss
             FROM nissaya_gloss
             WHERE gloss LIKE ? AND book_id != 'mula_ku_10'
+        """ + (" AND book_id = ?" if book else "") + """
             ORDER BY book_id ASC, page_number ASC, paragraph_number ASC
             LIMIT ? OFFSET ?
-        """, (f"%{query}%", limit, offset)).fetchall()
+        """, (f"%{query}%", book, limit, offset) if book else (f"%{query}%", limit, offset)).fetchall()
 
         try:
             total = n_conn.execute(
-                "SELECT count(*) FROM nissaya_gloss WHERE gloss LIKE ? AND book_id != 'mula_ku_10'",
-                (f"%{query}%",)).fetchone()[0]
+                "SELECT count(*) FROM nissaya_gloss WHERE gloss LIKE ? AND book_id != 'mula_ku_10'" + (" AND book_id = ?" if book else ""),
+                (f"%{query}%", book) if book else (f"%{query}%",)).fetchone()[0]
         except Exception:
             total = len(rows)
 
@@ -2223,7 +2252,7 @@ def api_search():
         if len(tokens) > 1:
             conn = get_pali_db()
             cur = conn.cursor()
-            return jsonify(search_pali_phrase(cur, query, page=page, limit=limit))
+            return jsonify(search_pali_phrase(cur, query, page=page, limit=limit, book_id=book))
 
         conn = get_pali_db()
         cur = conn.cursor()
@@ -2248,14 +2277,31 @@ def api_search():
         matched_words = [r["word"] for r in word_rows]
         # Ordered de-dup via dict (O(n)); membership test on a list was O(n²)
         # for common words with tens of thousands of rowid tokens.
-        all_page_ids = list(dict.fromkeys(
-            tok.split("_")[0]
-            for r in word_rows
-            for tok in (r["rowids"] or "").split(",")
-            if tok.strip()
-        ))
-
-        total_occurrences = sum(r["count"] for r in word_rows)
+        if book:
+            # Current-book scope: keep only pages of this book, and count
+            # occurrences from the wordlist tokens that fall on those pages.
+            book_pids = {str(r[0]) for r in cur.execute(
+                "SELECT id FROM pages WHERE book_id = ?", (book,)).fetchall()}
+            seen = {}
+            total_occurrences = 0
+            for r in word_rows:
+                for tok in (r["rowids"] or "").split(","):
+                    tok = tok.strip()
+                    if not tok:
+                        continue
+                    pid = tok.split("_")[0]
+                    if pid in book_pids:
+                        total_occurrences += 1
+                        seen[pid] = True
+            all_page_ids = list(seen.keys())
+        else:
+            all_page_ids = list(dict.fromkeys(
+                tok.split("_")[0]
+                for r in word_rows
+                for tok in (r["rowids"] or "").split(",")
+                if tok.strip()
+            ))
+            total_occurrences = sum(r["count"] for r in word_rows)
         total_pages = len(all_page_ids)
         slice_ids = all_page_ids[offset:offset + limit]
 

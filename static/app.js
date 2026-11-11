@@ -45,6 +45,7 @@ const state = {
     appView: "home",
     homeBasket: "mula",
     searchMode: "word",
+    searchBookScope: "all", // "all" = every book, "current" = the book now open
     theme: localStorage.getItem("tipitaka_theme") || "paper",
     fontSize: parseInt(localStorage.getItem("tipitaka_font_size") || "100", 10),
     isDictOpen: window.innerWidth > 992 && (localStorage.getItem("tipitaka_dict_open") === "1"),
@@ -330,6 +331,10 @@ const el = {
     btnClearSearch: document.getElementById("btnClearSearch"),
     scopeBtnPali: document.getElementById("scopeBtnPali"),
     scopeBtnMM: document.getElementById("scopeBtnMM"),
+    bookScopeBar: document.getElementById("bookScopeBar"),
+    bookScopeAllBtn: document.getElementById("bookScopeAllBtn"),
+    bookScopeCurrentBtn: document.getElementById("bookScopeCurrentBtn"),
+    currentBookName: document.getElementById("currentBookName"),
     paliTabsGroup: document.getElementById("paliTabsGroup"),
     mmTabsGroup: document.getElementById("mmTabsGroup"),
     modalTabBtns: document.querySelectorAll(".modal-tab-btn"),
@@ -5667,7 +5672,12 @@ async function performSearch() {
     el.searchSummary.style.display = "none";
 
     try {
-        const res = await fetch(`/api/search?q=${encodeURIComponent(q)}&type=${state.searchMode}&limit=30`);
+        let searchUrl = `/api/search?q=${encodeURIComponent(q)}&type=${state.searchMode}&limit=30`;
+        if (state.searchBookScope === "current") {
+            const scopedBookId = currentSearchBookId();
+            if (scopedBookId) searchUrl += `&book=${encodeURIComponent(scopedBookId)}`;
+        }
+        const res = await fetch(searchUrl);
         if (!res.ok) throw new Error(`Search failed (HTTP ${res.status})`);
         const data = await res.json();
         if (seq !== _searchSeq) return; // stale response — a newer search is in flight
@@ -5687,6 +5697,10 @@ async function performSearch() {
             el.searchSummary.innerHTML = `တွေ့ရှိသော စာမျက်နှာ စုစုပေါင်း <strong>${data.total.toLocaleString()}</strong> မျက်နှာ`;
         } else {
             el.searchSummary.innerHTML = `တွေ့ရှိမှု စုစုပေါင်း <strong>${data.total.toLocaleString()}</strong> ခု`;
+        }
+
+        if (state.searchBookScope === "current" && currentSearchBookId()) {
+            el.searchSummary.innerHTML += ` — ${escapeHtml(currentSearchBookName())} အတွင်း`;
         }
 
         let html = "";
@@ -5774,6 +5788,49 @@ async function performSearch() {
     }
 }
 
+// Current-book search scope: "လက်ရှိကျမ်း" limits text search to the book now open.
+// The book follows the search mode (its data source), not the reader pane:
+// Pali modes use the Pali book, Myanmar modes use the Myanmar book.
+const BOOK_SEARCH_MODES = ["word", "phrase", "sutta", "nissaya", "mm_phrase", "mm_toc"];
+function currentSearchBookId() {
+    if (state.searchMode === "mm_phrase" || state.searchMode === "mm_toc") return state.mmBookId;
+    return state.paliBookId;
+}
+function currentSearchBookName() {
+    if (state.searchMode === "mm_phrase" || state.searchMode === "mm_toc") return state.mmBookName || "မြန်မာပြန်";
+    return state.paliBookName || "ပါဠိတော်";
+}
+function defaultSearchPlaceholder() {
+    if (state.searchMode === "nissaya") return "မြန်မာနိဿယ စကားပြေအနက်များအတွင်း ရှာဖွေလိုသော စာလုံး ရိုက်ထည့်ပါ...";
+    if (state.searchScope === "pali") return "ပါဠိတော် ကျမ်းစာများအတွင်း ရှာဖွေလိုသော စာလုံး ရိုက်ထည့်ပါ...";
+    return "မြန်မာပြန် ကျမ်းစာများအတွင်း ရှာဖွေလိုသော စာလုံး ရိုက်ထည့်ပါ...";
+}
+function refreshBookScopeUI() {
+    const show = BOOK_SEARCH_MODES.includes(state.searchMode);
+    if (el.bookScopeBar) el.bookScopeBar.style.display = show ? "flex" : "none";
+    if (!show) return;
+    const bookId = currentSearchBookId();
+    const bookName = currentSearchBookName();
+    const hasBook = !!bookId;
+    if (state.searchBookScope === "current" && !hasBook) state.searchBookScope = "all";
+    if (el.currentBookName) el.currentBookName.textContent = bookName;
+    if (el.bookScopeAllBtn) el.bookScopeAllBtn.classList.toggle("active", state.searchBookScope === "all");
+    if (el.bookScopeCurrentBtn) {
+        el.bookScopeCurrentBtn.disabled = !hasBook;
+        el.bookScopeCurrentBtn.classList.toggle("active", state.searchBookScope === "current");
+    }
+    if (el.globalSearchInput) {
+        el.globalSearchInput.placeholder = (state.searchBookScope === "current" && hasBook)
+            ? "လက်ရှိကျမ်း (" + bookName + ") အတွင်း ရှာဖွေလိုသော စာလုံး ရိုက်ထည့်ပါ..."
+            : defaultSearchPlaceholder();
+    }
+}
+function setBookScope(scope) {
+    state.searchBookScope = scope;
+    refreshBookScopeUI();
+    if (el.globalSearchInput && el.globalSearchInput.value.trim()) performSearch();
+}
+
 function setSearchScope(scope, targetMode = null) {
     state.searchScope = scope;
     if (el.scopeBtnPali) el.scopeBtnPali.classList.toggle("active", scope === "pali");
@@ -5801,14 +5858,9 @@ function setSearchScope(scope, targetMode = null) {
     }
 
     if (el.globalSearchInput) {
-        if (state.searchMode === "nissaya") {
-            el.globalSearchInput.placeholder = "မြန်မာနိဿယ စကားပြေအနက်များအတွင်း ရှာဖွေလိုသော စာလုံး ရိုက်ထည့်ပါ...";
-        } else if (scope === "pali") {
-            el.globalSearchInput.placeholder = "ပါဠိတော် ကျမ်းစာများအတွင်း ရှာဖွေလိုသော စာလုံး ရိုက်ထည့်ပါ...";
-        } else {
-            el.globalSearchInput.placeholder = "မြန်မာပြန် ကျမ်းစာများအတွင်း ရှာဖွေလိုသော စာလုံး ရိုက်ထည့်ပါ...";
-        }
+        el.globalSearchInput.placeholder = defaultSearchPlaceholder();
     }
+    refreshBookScopeUI();
 }
 
 function openSearchModal() {
@@ -7630,11 +7682,18 @@ function setupEventListeners() {
             }
         });
     }
+    if (el.bookScopeAllBtn) {
+        el.bookScopeAllBtn.addEventListener("click", () => setBookScope("all"));
+    }
+    if (el.bookScopeCurrentBtn) {
+        el.bookScopeCurrentBtn.addEventListener("click", () => setBookScope("current"));
+    }
     el.modalTabBtns.forEach(btn => {
         btn.addEventListener("click", () => {
             el.modalTabBtns.forEach(b => b.classList.remove("active"));
             btn.classList.add("active");
             state.searchMode = btn.getAttribute("data-mode");
+            refreshBookScopeUI();
             performSearch();
         });
     });

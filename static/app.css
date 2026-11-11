@@ -1863,6 +1863,23 @@ body.hide-notes .note {
     line-height: 1;
 }
 
+.search-scope-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+/* Book scope row: keep the current-book name from overflowing its pill */
+.book-scope-bar .search-scope-btn {
+    min-width: 0;
+}
+
+.book-scope-bar .search-scope-btn span:nth-child(2) {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+}
+
 /* Search Modal Subtabs / Action Pills (Tier 2) */
 .search-subtabs-container {
     padding: 8px 16px;
