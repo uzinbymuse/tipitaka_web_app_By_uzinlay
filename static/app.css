@@ -191,7 +191,9 @@ select:disabled,
     display: flex;
     align-items: center;
     gap: 8px;
-    flex: 0 1 auto;   /* Can shrink if needed but won't grow beyond natural size */
+    flex: 0 0 auto;   /* Never shrink: the JS overflow manager only gives up
+                         right-side tools, so Home / edition / book title
+                         stay visible at any width or browser zoom. */
     overflow: hidden;
     white-space: nowrap;
     min-width: 0;
@@ -201,7 +203,7 @@ select:disabled,
     display: flex;
     align-items: center;
     gap: 4px;
-    flex-shrink: 1;   /* Center (page nav) can give space when needed */
+    flex-shrink: 0;   /* Page nav never shrinks — it is a core reading control. */
     white-space: nowrap;
     min-width: 0;
 }
@@ -210,7 +212,9 @@ select:disabled,
     display: flex;
     align-items: center;
     gap: 8px;
-    flex: 0 0 auto;   /* Right section: don't grow/shrink — hide individual buttons via media queries */
+    flex: 1 1 auto;   /* Takes the remaining space; the JS overflow manager
+                         moves tools that do not fit into the More ⋮ menu. */
+    justify-content: flex-end;
     white-space: nowrap;
     min-width: 0;
     overflow: visible; /* Ensure dropdowns are not clipped */
@@ -2862,6 +2866,35 @@ body.hide-notes .note {
 .header-more-menu .more-menu-dict.dict-active {
     color: var(--accent);
     background: var(--accent-light);
+}
+
+/* Tools moved into the More menu by the header overflow manager (JS).
+   They are the real buttons, only re-presented as menu rows, so every
+   handler keeps working. Labels are forced visible here even when a
+   narrow-width media query hides .btn-text in the bar (the JS also sets
+   the label's inline display, which wins over those rules). */
+.header-more-menu .in-more-menu {
+    display: flex !important;
+    width: 100%;
+    justify-content: flex-start;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 16px;
+    height: auto;
+    min-height: 40px;
+    border-bottom: 1px solid var(--border-color);
+    border-radius: 0;
+    font-size: 0.875rem;
+    white-space: normal;
+    flex-shrink: 0;
+}
+.header-more-menu .font-controls.in-more-menu,
+.header-more-menu .theme-switcher.in-more-menu {
+    justify-content: center;
+    padding: 10px 16px;
+}
+.header-more-menu .in-more-menu .btn-icon {
+    flex-shrink: 0;
 }
 
 /* ============================================================

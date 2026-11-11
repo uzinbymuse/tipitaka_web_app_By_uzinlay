@@ -8891,4 +8891,139 @@ window.addEventListener("DOMContentLoaded", function () {
             btnOpenHelp.dispatchEvent(new MouseEvent("click", { bubbles: false }));
         });
     }
+
+    // --- Header overflow manager: a zoom-proof top bar ---
+    // The bar holds ~2.9k px of controls. On narrower viewports — including
+    // browser zoom, which shrinks the CSS viewport — flexbox used to crush
+    // .header-left/.header-center (edition buttons, book title and page nav
+    // vanished) and clip the rightmost button. Instead, measure the real
+    // widths and move right-side tools that do not fit into this More menu,
+    // and move them back when space returns. Left/center never shrink.
+    var headerEl = document.querySelector(".app-header");
+    var headerRight = document.querySelector(".header-right");
+    var moreList = moreMenu.querySelector(".dropdown-list");
+    // First entry moves out first. The two dropdown wrappers (scroll mode,
+    // related commentary) are never moved — their popups cannot live inside
+    // this menu — and the More button itself is never moved.
+    var OVERFLOW_ORDER = [
+        "btnOpenHelp", "btnToggleFullscreen", "btnToggleDict",
+        "btnOpenHistory", "btnToggleNotes", "btnToggleNissaya",
+        "btnCrossLinkNissaya", "btnCrossLink", "btnOpenSearch",
+        "btnBookmarkToggle", "btnOpenEdition"
+    ];
+    var OVERFLOW_GROUPS = [".font-controls", ".theme-switcher"]; // moved last, as whole groups
+    var MIRRORS = {
+        btnToggleDict: "btnMoreDict",
+        btnToggleFullscreen: "btnMoreFullscreen",
+        btnOpenHelp: "btnMoreHelp"
+    };
+    var movedItems = []; // {node, mirror} in move order
+    var origOrder = headerRight ? Array.from(headerRight.children) : [];
+
+    function headerFits() {
+        return !headerEl || headerEl.scrollWidth <= headerEl.clientWidth + 1;
+    }
+
+    function setMovedLabelVisibility(node, inMenu) {
+        node.querySelectorAll(".btn-text").forEach(function (label) {
+            if (inMenu) label.style.setProperty("display", "inline", "important");
+            else label.style.removeProperty("display");
+        });
+        node.querySelectorAll(".kbd-shortcut").forEach(function (kbd) {
+            if (inMenu) kbd.style.setProperty("display", "none", "important");
+            else kbd.style.removeProperty("display");
+        });
+    }
+
+    function moveToMenu(node) {
+        var mirror = MIRRORS[node.id] ? document.getElementById(MIRRORS[node.id]) : null;
+        if (mirror) mirror.style.display = "none";
+        node.classList.add("in-more-menu");
+        setMovedLabelVisibility(node, true);
+        moreList.appendChild(node);
+        movedItems.push({ node: node, mirror: mirror });
+    }
+
+    function restoreFromMenu(entry) {
+        var node = entry.node;
+        node.classList.remove("in-more-menu");
+        setMovedLabelVisibility(node, false);
+        if (entry.mirror) entry.mirror.style.display = "";
+        // Put it back in its original slot: before the next original sibling
+        // that is still in the bar, else at the end.
+        var idx = origOrder.indexOf(node);
+        var placed = false;
+        for (var i = idx + 1; i < origOrder.length; i++) {
+            if (origOrder[i].parentElement === headerRight) {
+                headerRight.insertBefore(node, origOrder[i]);
+                placed = true;
+                break;
+            }
+        }
+        if (!placed) headerRight.appendChild(node);
+    }
+
+    function nextMovable() {
+        for (var i = 0; i < OVERFLOW_ORDER.length; i++) {
+            var el = document.getElementById(OVERFLOW_ORDER[i]);
+            if (el && el.parentElement === headerRight) return el;
+        }
+        for (var j = 0; j < OVERFLOW_GROUPS.length; j++) {
+            var g = headerRight.querySelector(OVERFLOW_GROUPS[j]);
+            if (g) return g;
+        }
+        return null;
+    }
+
+    function fitHeaderOverflow() {
+        if (!headerEl || !headerRight || !moreList) return;
+        if (headerEl.offsetParent === null) return; // header hidden (mobile reader view)
+        if (window.innerWidth <= 768) {
+            // Small screens: the CSS stages own the header; put everything back.
+            while (movedItems.length) restoreFromMenu(movedItems.pop());
+            moreWrapper.style.display = "";
+            return;
+        }
+        // Bring items back while there is room (last moved = first back).
+        while (movedItems.length) {
+            var entry = movedItems[movedItems.length - 1];
+            restoreFromMenu(entry);
+            movedItems.pop();
+            if (!headerFits()) {
+                moveToMenu(entry.node); // does not fit after all — move it back out
+                break;
+            }
+        }
+        // Move items out until the bar fits.
+        var guard = 0;
+        while (!headerFits() && guard++ < 30) {
+            var victim = nextMovable();
+            if (!victim) break;
+            moveToMenu(victim);
+        }
+        moreWrapper.style.display = movedItems.length ? "flex" : "";
+    }
+
+    // A moved tool is the real button: tapping it should also close this menu.
+    moreList.addEventListener("click", function (e) {
+        if (e.target.closest(".in-more-menu")) closeMoreMenu();
+    });
+
+    var fitTimer = null;
+    function requestFitHeader() {
+        if (fitTimer) clearTimeout(fitTimer);
+        fitTimer = setTimeout(fitHeaderOverflow, 120);
+    }
+    window.addEventListener("resize", requestFitHeader);
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(function () { fitHeaderOverflow(); });
+    window.addEventListener("load", function () { fitHeaderOverflow(); });
+    setTimeout(fitHeaderOverflow, 600);
+    fitHeaderOverflow();
+    window.fitHeaderOverflow = fitHeaderOverflow;
+
+    // Book/chapter titles change width when a book opens — re-fit then too.
+    var badgeEl = document.getElementById("currentBookBadge");
+    if (badgeEl && window.MutationObserver) {
+        new MutationObserver(function () { requestFitHeader(); }).observe(badgeEl, { childList: true, characterData: true, subtree: true });
+    }
 });
