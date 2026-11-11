@@ -2,6 +2,10 @@ import os
 import io
 import sys
 import sqlite3
+# Turso (remote libsql) adapter. Import is safe without libsql installed:
+# db_turso only raises when a TURSO_*_URL is set but libsql is missing.
+# With no TURSO_* vars set the app behaves exactly as before (local sqlite3).
+from db_turso import connect_turso, turso_enabled
 import re
 import webbrowser
 import threading
@@ -191,6 +195,16 @@ def add_cache_headers(response):
         response.headers["Cache-Control"] = "public, max-age=86400, stale-while-revalidate=604800"
     return response
 
+def _db_available(kind, local_path):
+    """True when a database is reachable: via Turso (URL set) or local file.
+
+    The app historically gated features on os.path.exists(<local DB file>);
+    on Vercel there is no local file, so a configured Turso URL counts as
+    available too. Local behaviour is unchanged (file exists -> True).
+    """
+    return turso_enabled(kind) or os.path.exists(local_path)
+
+
 def get_pali_db(readonly=True):
     """Get request-scoped read-only SQLite connection, or standalone read-write connection for mutations."""
     if not readonly:
@@ -208,11 +222,16 @@ def get_pali_db(readonly=True):
             conn = None
 
     if conn is None:
-        conn = sqlite3.connect(DB_PALI_RO_URI, uri=True, check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA query_only = ON")
-        conn.execute("PRAGMA cache_size = -64000")
-        conn.execute("PRAGMA mmap_size = 268435456")
+        if turso_enabled("pali"):
+            # Remote libsql: no local PRAGMAs (Hrana does not support them
+            # the same way); the adapter presents the sqlite3 surface.
+            conn = connect_turso("pali")
+        else:
+            conn = sqlite3.connect(DB_PALI_RO_URI, uri=True, check_same_thread=False)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA query_only = ON")
+            conn.execute("PRAGMA cache_size = -64000")
+            conn.execute("PRAGMA mmap_size = 268435456")
         g.pali_db = conn
     return conn
 
@@ -226,11 +245,14 @@ def get_mm_db():
             conn = None
 
     if conn is None:
-        conn = sqlite3.connect(DB_MM_RO_URI, uri=True, check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA query_only = ON")
-        conn.execute("PRAGMA cache_size = -32000")
-        conn.execute("PRAGMA mmap_size = 268435456")
+        if turso_enabled("mm"):
+            conn = connect_turso("mm")
+        else:
+            conn = sqlite3.connect(DB_MM_RO_URI, uri=True, check_same_thread=False)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA query_only = ON")
+            conn.execute("PRAGMA cache_size = -32000")
+            conn.execute("PRAGMA mmap_size = 268435456")
         g.mm_db = conn
     return conn
 
@@ -238,7 +260,7 @@ def get_nissaya_db():
     """Get request-scoped read-only SQLite connection for the Myanmar Nissaya
     gloss database. Returns None when nissaya.db is not deployed (feature
     degrades gracefully)."""
-    if not os.path.exists(DB_NISSAYA_PATH):
+    if not turso_enabled("nissaya") and not os.path.exists(DB_NISSAYA_PATH):
         return None
     conn = g.get('nissaya_db')
     if conn is not None:
@@ -248,10 +270,13 @@ def get_nissaya_db():
             conn = None
 
     if conn is None:
-        conn = sqlite3.connect(DB_NISSAYA_RO_URI, uri=True, check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA query_only = ON")
-        conn.execute("PRAGMA cache_size = -32000")
+        if turso_enabled("nissaya"):
+            conn = connect_turso("nissaya")
+        else:
+            conn = sqlite3.connect(DB_NISSAYA_RO_URI, uri=True, check_same_thread=False)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA query_only = ON")
+            conn.execute("PRAGMA cache_size = -32000")
         g.nissaya_db = conn
     return conn
 
@@ -532,7 +557,7 @@ def api_stats():
 
     mm_books_count = 0
     mm_pages_count = 0
-    if os.path.exists(DB_MM_PATH):
+    if _db_available("mm", DB_MM_PATH):
         conn_m = get_mm_db()
         cur_m = conn_m.cursor()
         mm_books_count = cur_m.execute("SELECT count(*) FROM book").fetchone()[0]
@@ -648,7 +673,7 @@ def api_book(book_id):
 
     # Check matching Myanmar book
     matching_mm_book = None
-    if os.path.exists(DB_MM_PATH):
+    if _db_available("mm", DB_MM_PATH):
         m_conn = get_mm_db()
         m_cur = m_conn.cursor()
         src = m_cur.execute("""
@@ -672,7 +697,7 @@ def api_book(book_id):
     })
 
 def get_companion_books(book_id):
-    if not os.path.exists(DB_PALI_PATH):
+    if not _db_available("pali", DB_PALI_PATH):
         return None
     conn = get_pali_db()
     cur = conn.cursor()
@@ -710,7 +735,7 @@ def get_companion_books(book_id):
     tika_list = [book_map[b] for b in sorted(all_related) if b in book_map and book_map[b]["basket"] == "tika" and b != book_id]
 
     mm_list = []
-    if os.path.exists(DB_MM_PATH):
+    if _db_available("mm", DB_MM_PATH):
         m_conn = get_mm_db()
         m_cur = m_conn.cursor()
         search_pali_ids = [book_id]
@@ -776,7 +801,7 @@ def api_page(book_id, page_num):
 
     # Find matching Myanmar translation page
     matching_mm = None
-    if os.path.exists(DB_MM_PATH):
+    if _db_available("mm", DB_MM_PATH):
         m_conn = get_mm_db()
         m_cur = m_conn.cursor()
         
@@ -1043,7 +1068,7 @@ def api_export(mode, book_id):
         edition = "ပါဠိတော်"
         table = "pages"
     else:
-        if not os.path.exists(DB_MM_PATH):
+        if not _db_available("mm", DB_MM_PATH):
             return jsonify({"error": "Myanmar DB not available"}), 404
         conn = get_mm_db()
         cur = conn.cursor()
@@ -1097,7 +1122,7 @@ def api_export(mode, book_id):
 
 @app.route("/api/mm/categories")
 def api_mm_categories():
-    if not os.path.exists(DB_MM_PATH):
+    if not _db_available("mm", DB_MM_PATH):
         return jsonify([])
     conn = get_mm_db()
     cur = conn.cursor()
@@ -1120,7 +1145,7 @@ def api_mm_categories():
 
 @app.route("/api/mm/books")
 def api_mm_books():
-    if not os.path.exists(DB_MM_PATH):
+    if not _db_available("mm", DB_MM_PATH):
         return jsonify([])
     conn = get_mm_db()
     cur = conn.cursor()
@@ -1134,7 +1159,7 @@ def api_mm_books():
 
 @app.route("/api/mm/book/<book_id>")
 def api_mm_book(book_id):
-    if not os.path.exists(DB_MM_PATH):
+    if not _db_available("mm", DB_MM_PATH):
         return jsonify({"error": "Myanmar database not found"}), 404
     conn = get_mm_db()
     cur = conn.cursor()
@@ -1188,7 +1213,7 @@ def api_mm_book(book_id):
 
 @app.route("/api/mm/page/<book_id>/<int:page_num>")
 def api_mm_page(book_id, page_num):
-    if not os.path.exists(DB_MM_PATH):
+    if not _db_available("mm", DB_MM_PATH):
         return jsonify({"error": "Myanmar database not found"}), 404
     conn = get_mm_db()
     cur = conn.cursor()
@@ -1335,7 +1360,7 @@ def api_match_para_to_page():
     result = {"para": para_num}
 
     # 1. Lookup in Myanmar DB
-    if os.path.exists(DB_MM_PATH):
+    if _db_available("mm", DB_MM_PATH):
         m_conn = get_mm_db()
         m_cur = m_conn.cursor()
         target_mm_id = mm_book_id
@@ -1367,11 +1392,11 @@ def api_match_para_to_page():
                     result["approximate"] = True
 
     # 2. Lookup in Pali DB
-    if os.path.exists(DB_PALI_PATH):
+    if _db_available("pali", DB_PALI_PATH):
         p_conn = get_pali_db()
         p_cur = p_conn.cursor()
         target_pali_id = pali_book_id
-        if not target_pali_id and mm_book_id and os.path.exists(DB_MM_PATH):
+        if not target_pali_id and mm_book_id and _db_available("mm", DB_MM_PATH):
             m_conn = get_mm_db()
             m_cur = m_conn.cursor()
             src = m_cur.execute("SELECT pali_book_id FROM source_book WHERE mm_book_id = ?", (mm_book_id,)).fetchone()
@@ -1410,8 +1435,8 @@ def api_match_pali_to_companion():
     if not source_book or not source_page:
         return jsonify({"error": "Missing source_book or source_page"}), 400
 
-    m_conn = get_mm_db() if os.path.exists(DB_MM_PATH) else None
-    p_conn = get_pali_db() if os.path.exists(DB_PALI_PATH) else None
+    m_conn = get_mm_db() if _db_available("mm", DB_MM_PATH) else None
+    p_conn = get_pali_db() if _db_available("pali", DB_PALI_PATH) else None
 
     # 1. Detect if source_book is Myanmar
     is_source_mm = False
@@ -1743,9 +1768,12 @@ def get_pali_stem_candidates(clean):
 @lru_cache(maxsize=16384)
 def _cached_pali_dict_lookup(clean):
     """Zero-I/O memoized lookup for recurring Pali words with morphological stemmer."""
-    conn = sqlite3.connect(DB_PALI_RO_URI, uri=True, check_same_thread=False)
-    try:
+    if turso_enabled("pali"):
+        conn = connect_turso("pali")
+    else:
+        conn = sqlite3.connect(DB_PALI_RO_URI, uri=True, check_same_thread=False)
         conn.row_factory = sqlite3.Row
+    try:
         cur = conn.cursor()
 
         candidates = get_pali_stem_candidates(clean)
@@ -1985,14 +2013,14 @@ def api_search():
         return jsonify(search_pali_phrase(cur, query, page=page, limit=limit))
 
     elif stype == "mm_phrase":
-        if not os.path.exists(DB_MM_PATH):
+        if not _db_available("mm", DB_MM_PATH):
             return jsonify({"results": [], "total": 0})
         m_conn = get_mm_db()
         return jsonify(search_mm_phrase(m_conn, query, page=page, limit=limit))
 
     elif stype == "mm_book":
         # Search Myanmar translated books
-        if not os.path.exists(DB_MM_PATH):
+        if not _db_available("mm", DB_MM_PATH):
             return jsonify({"results": [], "total": 0})
         m_conn = get_mm_db()
         m_cur = m_conn.cursor()
@@ -2012,7 +2040,7 @@ def api_search():
 
     elif stype == "mm_toc":
         # Search Myanmar TOC
-        if not os.path.exists(DB_MM_PATH):
+        if not _db_available("mm", DB_MM_PATH):
             return jsonify({"results": [], "total": 0})
         m_conn = get_mm_db()
         m_cur = m_conn.cursor()
@@ -2295,11 +2323,16 @@ _SYNC_DB_LOCK = threading.Lock()
 
 def _sync_conn():
     global _SYNC_DB_READY
-    conn = sqlite3.connect(SYNC_DB_PATH, timeout=10.0)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
-    conn.execute("PRAGMA foreign_keys=ON")
+    if turso_enabled("sync"):
+        # Remote libsql: no local PRAGMAs (WAL/synchronous/foreign_keys are
+        # local-file settings); schema init below runs the same for both.
+        conn = connect_turso("sync")
+    else:
+        conn = sqlite3.connect(SYNC_DB_PATH, timeout=10.0)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA foreign_keys=ON")
     # Lazy init: ensures tables exist even when the app is run via
     # gunicorn/systemd (where __main__ never executes). Idempotent.
     # Lock-guarded: two threaded first requests racing executescript on the
