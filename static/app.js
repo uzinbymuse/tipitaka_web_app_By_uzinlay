@@ -196,6 +196,7 @@ const el = {
     crossLinkIcon: document.getElementById("crossLinkIcon"),
     crossLinkLabel: document.getElementById("crossLinkLabel"),
     btnCrossLinkNissaya: document.getElementById("btnCrossLinkNissaya"),
+    btnViewOriginalImage: document.getElementById("btnViewOriginalImage"),
     btnToggleNotes: document.getElementById("btnToggleNotes"),
     toggleNotesLabel: document.getElementById("toggleNotesLabel"),
     btnToggleNotesMobile: document.getElementById("btnToggleNotesMobile"),
@@ -1880,6 +1881,10 @@ async function initApp() {
         state.paliBookId = "mula_vi_01";
         state.paliPage = 1;
     }
+
+    // Deep link from the bridge (?book=&page=) or a shared search (?search=).
+    handleDeepLink();
+    updateOriginalImageBtn();
 }
 
 // ----------------- Categories & Initialization -----------------
@@ -2011,6 +2016,7 @@ function setReaderMode(mode) {
         const curPg = (state.readerMode === "mm") ? state.mmPage : state.paliPage;
         highlightActiveToc(curPg, true);
     }
+    updateOriginalImageBtn();
 }
 
 function handleCrossLink() {
@@ -2026,6 +2032,62 @@ function handleCrossLink() {
             state.paliPage = state.matchingPali.page;
         }
         setReaderMode("pali");
+    }
+}
+
+// ----------------- Tipitaka Bridge: view the original scan -----------------
+// The bridge (https://tipitaka-bridge.vercel.app) links the text reader with
+// the scanned-image reader. Only 148 of the 192 text books have a scanned
+// counterpart, so the button is shown only for those books (baked list below,
+// generated from the bridge mapping.json — no extra request at startup).
+const BRIDGE_MAPPED_BOOKS = new Set(['annya_bi_01', 'annya_bi_02', 'annya_bi_03', 'annya_bi_04', 'annya_vi_01_02', 'annya_vi_01_03', 'annya_vi_01_04', 'annya_vi_02', 'attha_an_01', 'attha_an_02', 'attha_an_03', 'attha_an_04', 'attha_bi_01', 'attha_bi_02', 'attha_bi_03', 'attha_di_01', 'attha_di_02', 'attha_di_03', 'attha_ku_01', 'attha_ku_02_01', 'attha_ku_02_02', 'attha_ku_03', 'attha_ku_04', 'attha_ku_05_01', 'attha_ku_05_02', 'attha_ku_06', 'attha_ku_07', 'attha_ku_08_01', 'attha_ku_08_02', 'attha_ku_09', 'attha_ku_10', 'attha_ku_11', 'attha_ku_12', 'attha_ku_13', 'attha_ku_16', 'attha_ku_17', 'attha_ku_18_01', 'attha_ku_18_02', 'attha_ku_zat_01', 'attha_ku_zat_02', 'attha_ku_zat_03', 'attha_ku_zat_04', 'attha_ku_zat_05', 'attha_ku_zat_06', 'attha_ku_zat_07', 'attha_ma_01_01', 'attha_ma_01_02', 'attha_ma_02', 'attha_ma_03', 'attha_sa_01', 'attha_sa_02', 'attha_sa_03', 'attha_sa_04', 'attha_sa_05', 'attha_vi_01_01', 'attha_vi_01_02', 'attha_vi_02', 'attha_vi_03', 'attha_vi_04', 'mula_an_01', 'mula_an_02', 'mula_an_03', 'mula_an_04', 'mula_an_05', 'mula_an_06', 'mula_an_07', 'mula_an_08', 'mula_an_09', 'mula_an_10', 'mula_an_11', 'mula_bi_01', 'mula_bi_02', 'mula_bi_03', 'mula_bi_04', 'mula_bi_05', 'mula_bi_06_01', 'mula_bi_06_02', 'mula_bi_06_03', 'mula_bi_07_01', 'mula_bi_07_02', 'mula_bi_07_03', 'mula_bi_07_04', 'mula_bi_07_05', 'mula_di_01', 'mula_di_02', 'mula_di_03', 'mula_ku_01', 'mula_ku_02', 'mula_ku_03', 'mula_ku_04', 'mula_ku_05', 'mula_ku_06', 'mula_ku_07', 'mula_ku_08', 'mula_ku_09', 'mula_ku_10', 'mula_ku_11', 'mula_ku_12', 'mula_ku_13', 'mula_ku_14', 'mula_ku_15', 'mula_ku_16', 'mula_ku_17', 'mula_ku_18', 'mula_ku_19', 'mula_ku_21', 'mula_ma_01', 'mula_ma_02', 'mula_ma_03', 'mula_sa_01', 'mula_sa_02', 'mula_sa_03', 'mula_sa_04', 'mula_sa_05', 'mula_vi_01', 'mula_vi_02', 'mula_vi_03', 'mula_vi_04', 'mula_vi_05', 'tika_an_01', 'tika_an_02', 'tika_an_03', 'tika_an_04', 'tika_bi_01', 'tika_bi_02_01', 'tika_bi_02_02', 'tika_bi_03', 'tika_di_01_01', 'tika_di_01_02', 'tika_di_01_03', 'tika_di_02', 'tika_di_03', 'tika_ku_20_02', 'tika_ma_01', 'tika_ma_02', 'tika_ma_03', 'tika_ma_04', 'tika_sa_01', 'tika_sa_02', 'tika_sa_03', 'tika_sa_04', 'tika_sa_05', 'tika_vi_01', 'tika_vi_02', 'tika_vi_03', 'tika_vi_04', 'tika_vi_05', 'tika_vi_06']);
+
+// Show the "view original image" button only in a Pali-based reader mode and
+// only when the current book has a scanned counterpart. Runs after every book
+// or mode change; also re-fits the header so the overflow manager can move
+// the button into the More menu when space is tight.
+function updateOriginalImageBtn() {
+    const btn = el.btnViewOriginalImage;
+    if (!btn) return;
+    const show = (state.readerMode === "pali" || state.readerMode === "nissaya" || state.readerMode === "split")
+        && BRIDGE_MAPPED_BOOKS.has(state.paliBookId);
+    btn.style.display = show ? "inline-flex" : "none";
+    if (typeof window.fitHeaderOverflow === "function") window.fitHeaderOverflow();
+}
+
+function handleViewOriginalImage() {
+    const book = state.paliBookId;
+    const page = state.paliPage || 1;
+    if (!book) return;
+    window.open("https://tipitaka-bridge.vercel.app/to-image?book=" + encodeURIComponent(book) + "&page=" + page, "_blank");
+}
+
+// Deep links, used by the bridge's /to-text route (?book=&page=) and by
+// shared search links (?search=). Runs once at startup, after the book
+// lists have loaded; an unknown book slug is ignored (stay on Home).
+function handleDeepLink() {
+    let params;
+    try {
+        params = new URLSearchParams(window.location.search);
+    } catch (e) {
+        return;
+    }
+    const dlBook = params.get("book");
+    const dlSearch = params.get("search");
+    if (dlBook) {
+        const known = (state.paliCategories || []).some(function (cat) {
+            return (cat.books || []).some(function (b) { return b.id === dlBook; });
+        });
+        if (!known) return;
+        const dlPage = parseInt(params.get("page") || "1", 10) || 1;
+        state.paliBookId = dlBook;
+        state.paliPage = dlPage;
+        setReaderMode("pali");
+        setAppView("reader");
+    } else if (dlSearch) {
+        openSearchModal();
+        el.globalSearchInput.value = dlSearch;
+        performSearch();
     }
 }
 
@@ -2722,6 +2784,7 @@ async function loadPaliBook(bookId, targetPage = null) {
             renderTOC();
             renderSuttas();
             renderRelatedDropdown();
+            updateOriginalImageBtn();
             highlightActiveBookInSidebar();
             if (state.appView === "reader" && window.innerWidth > 992) {
                 switchToSidebarTab("tab-toc");
@@ -6821,6 +6884,7 @@ function setupEventListeners() {
     el.btnModeSplit.addEventListener("click", () => setReaderMode("split"));
     el.btnCrossLink.addEventListener("click", handleCrossLink);
     if (el.btnCrossLinkNissaya) el.btnCrossLinkNissaya.addEventListener("click", handleCrossLinkNissaya);
+    if (el.btnViewOriginalImage) el.btnViewOriginalImage.addEventListener("click", handleViewOriginalImage);
 
     // Toggle Footnotes / Variant Readings
     if (el.btnToggleNotes) {
@@ -8942,7 +9006,7 @@ window.addEventListener("DOMContentLoaded", function () {
     var OVERFLOW_ORDER = [
         "btnOpenHelp", "btnToggleFullscreen", "btnToggleDict",
         "btnOpenHistory", "btnToggleNotes", "btnToggleNissaya",
-        "btnCrossLinkNissaya", "btnCrossLink", "btnOpenSearch",
+        "btnCrossLinkNissaya", "btnCrossLink", "btnViewOriginalImage", "btnOpenSearch",
         "btnBookmarkToggle", "btnOpenEdition"
     ];
     var OVERFLOW_GROUPS = [".font-controls", ".theme-switcher"]; // moved last, as whole groups
