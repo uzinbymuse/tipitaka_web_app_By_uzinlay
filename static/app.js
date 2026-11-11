@@ -3053,15 +3053,31 @@ async function loadPaliPage(bookId, pageNum = null, highlightWord = null, isAppe
     }
     
     try {
-        const res = await fetch(`/api/page/${bookId}/${targetNum}`);
+        const pageUrl = `/api/page/${bookId}/${targetNum}` + ((isAppend || isPrepend) ? "?light=1" : "");
+        const res = await fetch(pageUrl);
         if (thisSession !== state.feedSessionId) return;
         if (!res.ok) throw new Error(`Page load failed (HTTP ${res.status})`);
         const data = await res.json();
-        
+
         state.paliFirstPage = data.first_page;
         state.paliLastPage = data.last_page;
-        state.matchingMM = data.matching_mm;
+        // Appends/prepends load with ?light=1, which omits matching_mm —
+        // never let that overwrite the cross-link target from the full load.
+        if (!isAppend && !isPrepend) state.matchingMM = data.matching_mm;
         const actualPage = data.page;
+
+        // Prefetch the next page (page-speed fix A): warm the browser +
+        // edge cache before the user scrolls, so the next append usually
+        // hits cache instead of paying a ~5s origin round-trip. Same
+        // light-ness as this load, so the cached entry matches what the
+        // next load asks for. Low priority and best-effort — never delays
+        // this render.
+        try {
+            if (data.next_page) {
+                const nextUrl = `/api/page/${bookId}/${data.next_page}` + ((isAppend || isPrepend) ? "?light=1" : "");
+                fetch(nextUrl, { priority: "low" }).then(function (r) { return r.arrayBuffer(); }).catch(function () {});
+            }
+        } catch (e) { /* prefetch is best-effort */ }
         
         if (_isPaliReaderMode()) {
             let html = cleanPaliContent(data.content);
@@ -3384,7 +3400,8 @@ async function loadMMPage(bookId, pageNum = null, isSplitRightPane = false, isAp
     }
 
     try {
-        const res = await fetch(`/api/mm/page/${bookId}/${targetNum}`);
+        const mmPageUrl = `/api/mm/page/${bookId}/${targetNum}` + ((isAppend || isPrepend) ? "?light=1" : "");
+        const res = await fetch(mmPageUrl);
         if (thisSession !== state.feedSessionId) return;
         if (!res.ok) throw new Error(`Page load failed (HTTP ${res.status})`);
         const data = await res.json();
@@ -3392,8 +3409,19 @@ async function loadMMPage(bookId, pageNum = null, isSplitRightPane = false, isAp
 
         state.mmFirstPage = data.first_page;
         state.mmLastPage = data.last_page;
-        state.matchingPali = data.matching_pali;
+        // Appends/prepends load with ?light=1, which omits matching_pali —
+        // never let that overwrite the cross-link target from the full load.
+        if (!isAppend && !isPrepend) state.matchingPali = data.matching_pali;
         const actualPage = data.page;
+
+        // Prefetch the next page (page-speed fix A) — same reasoning as
+        // loadPaliPage: warm the cache before the user scrolls.
+        try {
+            if (data.next_page) {
+                const nextUrl = `/api/mm/page/${bookId}/${data.next_page}` + ((isAppend || isPrepend) ? "?light=1" : "");
+                fetch(nextUrl, { priority: "low" }).then(function (r) { return r.arrayBuffer(); }).catch(function () {});
+            }
+        } catch (e) { /* prefetch is best-effort */ }
 
         if (state.readerMode === "mm" && !isSplitRightPane) {
             if (state.scrollMode === "feed") {
@@ -3805,7 +3833,9 @@ async function loadSplitRightPage(bookId, pageNum, type, matchedPara = null) {
 
     if (type === "mm") {
         try {
-            const res = await fetch(`/api/mm/page/${bookId}/${pageNum}`);
+            // ?light=1: the companion pane never uses matching_pali, so it
+            // must not pay for the cross-link lookup (page-speed fix B).
+            const res = await fetch(`/api/mm/page/${bookId}/${pageNum}?light=1`);
             if (res.ok) {
                 const data = await res.json();
                 state.splitRightBookName = data.book_name;
@@ -3836,7 +3866,9 @@ async function loadSplitRightPage(bookId, pageNum, type, matchedPara = null) {
         }
     } else {
         try {
-            const res = await fetch(`/api/page/${bookId}/${pageNum}`);
+            // ?light=1: the companion pane never uses matching_mm, so it
+            // must not pay for the cross-link lookup (page-speed fix B).
+            const res = await fetch(`/api/page/${bookId}/${pageNum}?light=1`);
             if (res.ok) {
                 const data = await res.json();
                 state.splitRightBookName = data.book_name;
@@ -8900,6 +8932,8 @@ window.addEventListener("DOMContentLoaded", function () {
     // widths and move right-side tools that do not fit into this More menu,
     // and move them back when space returns. Left/center never shrink.
     var headerEl = document.querySelector(".app-header");
+    var headerLeft = document.querySelector(".header-left");
+    var headerCenter = document.querySelector(".header-center");
     var headerRight = document.querySelector(".header-right");
     var moreList = moreMenu.querySelector(".dropdown-list");
     // First entry moves out first. The two dropdown wrappers (scroll mode,
@@ -8920,8 +8954,31 @@ window.addEventListener("DOMContentLoaded", function () {
     var movedItems = []; // {node, mirror} in move order
     var origOrder = headerRight ? Array.from(headerRight.children) : [];
 
+    // scrollWidth cannot detect overflow here: .app-header (and
+    // .header-right) use overflow: visible, and for overflow:visible
+    // elements scrollWidth reports the box width, not the overflowing
+    // content — so the first version of this manager always thought the
+    // bar fit and never moved anything. Measure the real widths instead:
+    // the summed natural widths of each section's children, plus gaps
+    // and the header's own padding.
+    function contentWidth(el) {
+        if (!el) return 0;
+        var w = 0;
+        var kids = el.children;
+        for (var i = 0; i < kids.length; i++) w += kids[i].offsetWidth;
+        var gap = parseFloat(getComputedStyle(el).gap) || 0;
+        if (kids.length > 1) w += gap * (kids.length - 1);
+        return w;
+    }
+
     function headerFits() {
-        return !headerEl || headerEl.scrollWidth <= headerEl.clientWidth + 1;
+        if (!headerEl) return true;
+        var style = getComputedStyle(headerEl);
+        var padX = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0);
+        var gap = parseFloat(style.gap) || 0;
+        var total = contentWidth(headerLeft) + contentWidth(headerCenter) + contentWidth(headerRight)
+            + padX + gap * 2;
+        return total <= headerEl.clientWidth + 1;
     }
 
     function setMovedLabelVisibility(node, inMenu) {

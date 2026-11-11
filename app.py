@@ -205,6 +205,37 @@ def _db_available(kind, local_path):
     return turso_enabled(kind) or os.path.exists(local_path)
 
 
+# Warm-instance Turso connection cache (page-speed fix C).
+# Vercel reuses a warm function instance across requests, but every page
+# call used to open a fresh remote libsql connection (TLS + Hrana session
+# setup) and close it at teardown. Reusing the connection inside a warm
+# instance removes that setup from every page turn. Connections are
+# probed (SELECT 1) before reuse and recreated on failure. Local sqlite
+# connections keep their existing per-request (Flask g) lifecycle — they
+# are cheap and file-scoped. Vercel's Python runtime handles one request
+# at a time per instance, so no lock is needed around the shared object.
+_WARM_TURSO = {}
+
+
+def _get_warm_turso(kind):
+    """Return a live Turso connection for ``kind``, reusing the warm
+    instance's connection when its probe succeeds."""
+    conn = _WARM_TURSO.get(kind)
+    if conn is not None:
+        try:
+            conn.execute("SELECT 1")
+            return conn
+        except Exception:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            _WARM_TURSO.pop(kind, None)
+    conn = connect_turso(kind)
+    _WARM_TURSO[kind] = conn
+    return conn
+
+
 def get_pali_db(readonly=True):
     """Get request-scoped read-only SQLite connection, or standalone read-write connection for mutations."""
     if not readonly:
@@ -225,7 +256,8 @@ def get_pali_db(readonly=True):
         if turso_enabled("pali"):
             # Remote libsql: no local PRAGMAs (Hrana does not support them
             # the same way); the adapter presents the sqlite3 surface.
-            conn = connect_turso("pali")
+            # Reuse the warm instance's connection (page-speed fix C).
+            conn = _get_warm_turso("pali")
         else:
             conn = sqlite3.connect(DB_PALI_RO_URI, uri=True, check_same_thread=False)
             conn.row_factory = sqlite3.Row
@@ -246,7 +278,8 @@ def get_mm_db():
 
     if conn is None:
         if turso_enabled("mm"):
-            conn = connect_turso("mm")
+            # Reuse the warm instance's connection (page-speed fix C).
+            conn = _get_warm_turso("mm")
         else:
             conn = sqlite3.connect(DB_MM_RO_URI, uri=True, check_same_thread=False)
             conn.row_factory = sqlite3.Row
@@ -271,7 +304,8 @@ def get_nissaya_db():
 
     if conn is None:
         if turso_enabled("nissaya"):
-            conn = connect_turso("nissaya")
+            # Reuse the warm instance's connection (page-speed fix C).
+            conn = _get_warm_turso("nissaya")
         else:
             conn = sqlite3.connect(DB_NISSAYA_RO_URI, uri=True, check_same_thread=False)
             conn.row_factory = sqlite3.Row
@@ -282,15 +316,19 @@ def get_nissaya_db():
 
 @app.teardown_appcontext
 def close_db_connections(exception=None):
-    """Automatically close all request-scoped database connections."""
+    """Automatically close all request-scoped database connections.
+
+    Turso connections are NOT closed here: they live in the warm-instance
+    cache (_WARM_TURSO) and are reused across requests (page-speed fix C).
+    Local sqlite connections are closed as before."""
     pali_db = g.pop('pali_db', None)
-    if pali_db is not None:
+    if pali_db is not None and not turso_enabled("pali"):
         pali_db.close()
     mm_db = g.pop('mm_db', None)
-    if mm_db is not None:
+    if mm_db is not None and not turso_enabled("mm"):
         mm_db.close()
     nissaya_db = g.pop('nissaya_db', None)
-    if nissaya_db is not None:
+    if nissaya_db is not None and not turso_enabled("nissaya"):
         nissaya_db.close()
 
 def heal_databases():
@@ -774,6 +812,11 @@ def api_pali_companions(book_id):
 
 @app.route("/api/page/<book_id>/<int:page_num>")
 def api_page(book_id, page_num):
+    # ?light=1: skip the Myanmar cross-link lookup (page-speed fix B).
+    # Feed appends/prepends never render matching_mm — the cross-link
+    # button keeps the value from the first full load — so they must not
+    # pay for a second database connection plus up to 3 extra queries.
+    light = request.args.get("light") == "1"
     conn = get_pali_db()
     cur = conn.cursor()
 
@@ -801,7 +844,7 @@ def api_page(book_id, page_num):
 
     # Find matching Myanmar translation page
     matching_mm = None
-    if _db_available("mm", DB_MM_PATH):
+    if not light and _db_available("mm", DB_MM_PATH):
         m_conn = get_mm_db()
         m_cur = m_conn.cursor()
         
@@ -1213,6 +1256,9 @@ def api_mm_book(book_id):
 
 @app.route("/api/mm/page/<book_id>/<int:page_num>")
 def api_mm_page(book_id, page_num):
+    # ?light=1: skip the Pali cross-link lookup (page-speed fix B, same
+    # reasoning as api_page — feed appends never render matching_pali).
+    light = request.args.get("light") == "1"
     if not _db_available("mm", DB_MM_PATH):
         return jsonify({"error": "Myanmar database not found"}), 404
     conn = get_mm_db()
@@ -1236,13 +1282,16 @@ def api_mm_page(book_id, page_num):
         ORDER BY page_number DESC LIMIT 1
     """, (book_id, page_num)).fetchone()
 
-    # Find matching Pali page
+    # Find matching Pali page (skipped with ?light=1 — feed appends never
+    # render matching_pali; see api_page).
     matching_pali = None
-    pmap = cur.execute("""
-        SELECT pali_book_id, pali_page_number 
-        FROM mm_pali_page_map 
-        WHERE mm_book_id = ? AND mm_page_number = ?
-    """, (book_id, page_num)).fetchone()
+    pmap = None
+    if not light:
+        pmap = cur.execute("""
+            SELECT pali_book_id, pali_page_number 
+            FROM mm_pali_page_map 
+            WHERE mm_book_id = ? AND mm_page_number = ?
+        """, (book_id, page_num)).fetchone()
 
     if pmap:
         p_conn = get_pali_db()
@@ -1250,7 +1299,7 @@ def api_mm_page(book_id, page_num):
         pb = p_cur.execute("SELECT name FROM books WHERE id = ?", (pmap[0],)).fetchone()
         if pb:
             matching_pali = {"book_id": pmap[0], "book_name": pb[0], "page": pmap[1]}
-    else:
+    elif not light:
         src = cur.execute("SELECT pali_book_id FROM source_book WHERE mm_book_id = ?", (book_id,)).fetchone()
         if src:
             p_bid = src[0]
@@ -1261,15 +1310,15 @@ def api_mm_page(book_id, page_num):
             p_conn = get_pali_db()
             p_cur = p_conn.cursor()
             if nums:
-                # Single batched query for all paragraph numbers (was one LIKE
-                # query per paragraph, with the pattern interpolated into SQL).
-                # Majority vote: each paragraph number votes once, for the
-                # first (lowest) page whose paranum contains it.
-                like_clauses = " OR ".join(["paranum LIKE ?"] * len(nums))
-                like_params = [f"%-{n}-%" for n in nums]
+                # One plain lookup for the book's pages, then vote in Python
+                # (page-speed fix F). The old version ran one leading-wildcard
+                # LIKE per paragraph number — a pattern no index can serve —
+                # over every page of the book. Majority vote: each paragraph
+                # number votes once, for the first (lowest) page whose
+                # paranum contains it.
                 rows = p_cur.execute(
-                    f"SELECT page, paranum FROM pages WHERE book_id = ? AND ({like_clauses}) ORDER BY page",
-                    (p_bid, *like_params)).fetchall()
+                    "SELECT page, paranum FROM pages WHERE book_id = ? AND paranum IS NOT NULL AND paranum != '' ORDER BY page",
+                    (p_bid,)).fetchall()
                 row_segs = [(pg, set(str(pn).split("-"))) for pg, pn in rows]
                 pali_page_counts = {}
                 for num in nums:
@@ -1281,11 +1330,15 @@ def api_mm_page(book_id, page_num):
                 if pali_page_counts:
                     target_pali_page = max(pali_page_counts.items(), key=lambda x: (x[1], x[0]))[0]
                 else:
-                    p_page_row = p_cur.execute(
-                        "SELECT page FROM pages WHERE book_id = ? AND paranum LIKE ? ORDER BY page LIMIT 1",
-                        (p_bid, f"%-{nums[0]}-%")).fetchone()
-                    if p_page_row:
-                        target_pali_page = p_page_row[0]
+                    # No page contains any listed paragraph: fall back to the
+                    # first page whose paranum contains the first number
+                    # (same search, over the rows already fetched — no extra
+                    # round-trip, no LIKE).
+                    ns0 = str(nums[0])
+                    for pg, segs in row_segs:
+                        if ns0 in segs:
+                            target_pali_page = pg
+                            break
             pb = p_cur.execute("SELECT name FROM books WHERE id = ?", (p_bid,)).fetchone()
             if pb:
                 matching_pali = {"book_id": p_bid, "book_name": pb[0], "page": target_pali_page, "paragraphs": nums}
