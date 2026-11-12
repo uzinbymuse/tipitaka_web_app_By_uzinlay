@@ -399,7 +399,7 @@ const el = {
     btnMobileHeaderTOC: document.getElementById("btnMobileHeaderTOC"),
     btnMobilePageBadge: document.getElementById("btnMobilePageBadge"),
 
-    // Mobile Dedicated Reader Toolbar (5 Items)
+    // Mobile Dedicated Reader Toolbar (6 Items)
     mobileReaderToolbar: document.getElementById("mobileReaderToolbar"),
     btnReaderEdition: document.getElementById("btnReaderEdition"),
     toolbarEditionIcon: document.getElementById("toolbarEditionIcon"),
@@ -409,6 +409,7 @@ const el = {
     btnReaderBookmark: document.getElementById("btnReaderBookmark"),
     toolbarBookmarkIcon: document.getElementById("toolbarBookmarkIcon"),
     toolbarBookmarkLabel: document.getElementById("toolbarBookmarkLabel"),
+    btnReaderOriginalImage: document.getElementById("btnReaderOriginalImage"),
     btnReaderMore: document.getElementById("btnReaderMore"),
 
     // Unified Edition Switcher Modal ("ကျမ်းရွေး")
@@ -2057,6 +2058,11 @@ function updateOriginalImageBtn() {
     const show = (state.readerMode === "pali" || state.readerMode === "nissaya" || state.readerMode === "split")
         && BRIDGE_MAPPED_BOOKS.has(state.paliBookId);
     btn.style.display = show ? "inline-flex" : "none";
+    // Same rule for the mobile reader-toolbar button (2026-11-12): the
+    // desktop header is hidden on phones, so without this the button was
+    // unreachable on mobile. Hidden books keep the toolbar at 5 items.
+    const mobileBtn = el.btnReaderOriginalImage;
+    if (mobileBtn) mobileBtn.style.display = show ? "flex" : "none";
     if (typeof window.fitHeaderOverflow === "function") window.fitHeaderOverflow();
 }
 
@@ -8140,6 +8146,13 @@ function setupEventListeners() {
                 el.toolbarBookmarkLabel.textContent = isBookmarked ? "မှတ်ပြီး" : "စာမှတ်";
             }
             showScrollToast(isBookmarked ? "🔖 စာမျက်နှာကို မှတ်သားပြီးပါပြီ" : "စာမှတ်ကို ဖယ်ရှားပြီးပါပြီ");
+        });
+    }
+
+    if (el.btnReaderOriginalImage) {
+        el.btnReaderOriginalImage.addEventListener("click", (e) => {
+            e.stopPropagation();
+            handleViewOriginalImage();
         });
     }
 

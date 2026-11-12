@@ -8,7 +8,7 @@
     <!-- Authentic Fonts and Styles -->
     <link rel="stylesheet" href="/static/style_unicode.css">
     <link rel="preload" href="/static/Pyidaungsu-2.5.3_Regular.ttf" as="font" type="font/ttf" crossorigin>
-    <link rel="stylesheet" href="/static/app.css?v=7.83">
+    <link rel="stylesheet" href="/static/app.css?v=7.84">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220%22><text y=%2226%22 font-size=%2224%22>☸️</text></svg>">
 </head>
 <body class="theme-paper hide-notes view-home">
@@ -1353,7 +1353,7 @@
         </button>
     </nav>
 
-    <!-- Mobile Dedicated Reader Toolbar (Option A: 5 Ergonomic Actions on Mobile <= 768px in reader view) -->
+    <!-- Mobile Dedicated Reader Toolbar (Option A: 6 Ergonomic Actions on Mobile <= 768px in reader view) -->
     <nav class="mobile-reader-toolbar" id="mobileReaderToolbar" style="display:none;" aria-label="စာဖတ် လုပ်ဆောင်ချက်များ">
         <!-- 1. Unified Edition Switcher / ကျမ်းရွေး (Dynamic: ☸️ ပါဠိ / 🇲🇲 မြန်မာ / 📖 အဋ္ဌ / 📜 ဋီကာ) -->
         <button class="reader-toolbar-item" id="btnReaderEdition" title="ကျမ်းစာနှင့် ဘာသာပြန် ရွေးချယ်ရန်">
@@ -1395,7 +1395,13 @@
             <span class="reader-toolbar-label" id="toolbarBookmarkLabel">စာမှတ်</span>
         </button>
 
-        <!-- 5. Settings / အပြင်အဆင် -->
+        <!-- 5. View Original Scan / ဆဋ္ဌမူ (via Tipitaka Bridge — same button as the desktop header) -->
+        <button class="reader-toolbar-item" id="btnReaderOriginalImage" title="ဆဋ္ဌမူ ကြည့်ရန်">
+            <span class="reader-toolbar-icon">🖼️</span>
+            <span class="reader-toolbar-label">ဆဋ္ဌမူ</span>
+        </button>
+
+        <!-- 6. Settings / အပြင်အဆင် -->
         <button class="reader-toolbar-item" id="btnReaderMore" title="အပြင်အဆင်နှင့် အခြား လုပ်ဆောင်ချက်များ">
             <span class="reader-toolbar-icon">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -1584,6 +1590,6 @@
     </div>
 
     <!-- Main JavaScript Logic -->
-    <script src="/static/app.js?v=7.83"></script>
+    <script src="/static/app.js?v=7.84"></script>
 </body>
 </html>
