@@ -6,7 +6,17 @@
 > "verified" claim — re-check live.**
 >
 > Language: Burmese (user's working language). Technical terms in English.
-> Last updated: 2026-11-11 ~15:44 +0630. Status: **LIVE and verified.**
+> Last updated: 2026-11-12 ~08:40 +0630. Status: **LIVE and verified.**
+>
+> **Changes since 2026-11-11 (other Muse agent, commits 9ca48f2–789e51f,
+> v7.80–v7.83):** deep links (`?book=&page=`, `?search=`), search-in-current-book
+> scope (`/api/search ?book=`), a JS header-overflow manager (moves tools that
+> don't fit into the More menu), and the **Tipitaka Bridge "ဆဋ္ဌမူ" button**
+> (`btnViewOriginalImage`, opens the scanned original via
+> `tipitaka-bridge.vercel.app/to-image`, 148 of 192 books mapped).
+> **2026-11-12 (this Muse, commit db80156, v7.84):** the ဆဋ္ဌမူ button now
+> also appears on mobile — as a 6th item in the mobile reader toolbar
+> (`btnReaderOriginalImage`), same show/hide rule as desktop. See §5 note.
 
 ---
 
@@ -193,6 +203,11 @@ Other documented methods (see `SELFHOST.md` §5 for details):
   21 cards, footer updated. The old VPS card (tipi.upanna.top) stays as-is.
 - [ ] **User's phone check** of https://tipitaka-web-three.vercel.app
   (he has not confirmed it on his phone yet).
+- [ ] **Phone check of the mobile ဆဋ္ဌမူ button (v7.84, 2026-11-12):**
+  it shows in the bottom toolbar only for the 148 mapped books and only in
+  Pali/Nissaya/Split mode — on other books it is hidden by design (same rule
+  as the desktop header button). If he opens an unmapped book and doesn't see
+  it, that is expected, not a bug.
 - [ ] Keep-alive: first scheduled run Nov 14, 2026 — confirm it fires
   and stays silent; if a DB ever fails, alert the user (Burmese) in the
   Tipitaka Vercel + Turso side chat.
