@@ -185,6 +185,14 @@ def add_cache_headers(response):
         response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
+        # Cross-origin sync: the tipitaka01 image viewer (a separate
+        # Vercel site) calls /api/sync/* to sync image bookmarks with
+        # the same account. The secret in the POST body is the auth;
+        # CORS only lets the browser make the call, it grants nothing.
+        if path.startswith("/api/sync"):
+            response.headers["Access-Control-Allow-Origin"] = "*"
+            response.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
+            response.headers["Access-Control-Allow-Headers"] = "Content-Type"
     # 2. Static CSS, JS, fonts: cache in browser for 30 days
     elif path.startswith("/static/"):
         response.headers["Cache-Control"] = "public, max-age=2592000, immutable"

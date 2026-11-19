@@ -459,9 +459,13 @@ const AnnotationManager = {
         } catch (e) { console.error("Annotation save failed:", e); }
     },
 
-    // Visible annotations (excludes tombstones)
+    // Visible annotations (excludes tombstones). Image-viewer bookmarks
+    // (id "imgbm-...") live in the same sync_annotations table but belong
+    // to the tipitaka01 image viewer, not the text reader — never show
+    // them here (they have no paragraph to highlight and their page is
+    // a PDF page, not a text page).
     getAll() {
-        return this._readRaw().filter(a => !a.deleted);
+        return this._readRaw().filter(a => !a.deleted && !(a.id && a.id.indexOf("imgbm-") === 0));
     },
 
     getAllIncludingDeleted() {
